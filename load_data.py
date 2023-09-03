@@ -161,5 +161,4 @@ def update_log_table(hotel_codes: str):
 
 
 if __name__ == "__main__":
-    hotels = ["RCHMD", "LEXGT", "SEFLR"]
-    update_log_table(hotels)
+    pass
