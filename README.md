@@ -1,6 +1,12 @@
 # Description
 ## Problem:
-The company I work at had started using a new platform where most of the data pipelines we needed were completed except this one. We wanted some specific data which at the time could only be collected by logging into the vendor website, going to the destination page, selecting a hotel, and clicking a download button. We wanted the exported data in a GCP table for analysis and to utilize for BI solutions but it wasn't something the vendor would get to until 2024.
+The company I work at had started using a new platform where most of the data pipelines we needed were completed except this one. We wanted some specific data which at the time could only be collected by the following steps.
+	1. Log into the vendor website
+ 	2. Go to the destination page
+  	3. Select a hotel
+   	4. Click the download button 
+    
+We wanted the exported data in a GCP table for analysis and to utilize for BI solutions but it wasn't something the vendor would get to until 2024.
 
 ## Solution:
 This project automates those manual steps to download the files based on the previous optimization that occurred for each hotel that is on this platform. When the files are downloaded it then cleans the data, adds some new data points, and then uploads to appropriate GCP tables for later use in tools like Data Studio or Tableau.
