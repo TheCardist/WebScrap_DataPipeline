@@ -1,10 +1,10 @@
 # Description
 ## Problem:
 The company I work at had started using a new platform where most of the data pipelines we needed were completed except this one. We wanted some specific data which at the time could only be collected by the following steps.
-	- 1. Log into the vendors website
- 	- 2. Go to the destination page
-  	- 3. Select a hotel
-   	- 4. Click the download button
+- 1. Log into the vendors website
+- 2. Go to the destination page
+- 3. Select a hotel
+- 4. Click the download button
     
 We wanted the exported data in a GCP table for analysis and to utilize for BI solutions but it wasn't something the vendor would get to until 2024.
 
