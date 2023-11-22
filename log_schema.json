@@ -1,0 +1,7 @@
+[
+  {
+    "name": "LOC_ID",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  }
+]
