@@ -1,156 +1,116 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from utils import (
-    validate_lst_optimizations,
-    validate_file_download,
-    CustomException,
-    logger,
-)
-from load_data import load_to_bigquery
+# Standard library
 import time
 import os
-from retry import retry
-import pandas as pd
-from dotenv import load_dotenv
 
-load_dotenv()
-
-# Credentials to login to N2P Site
-USERNAME = os.getenv("USERNAME")
-PASSWORD = os.getenv("PASSWORD")
-
-
-def create_webdriver() -> webdriver:
-    """Setup chrome driver for Selenium, running headless mode with limited logs and custom download destination."""
-
-    chrome_binary_path = "/usr/bin/google-chrome"
-    prefs = {"download.default_directory": "./downloads"}
-    options = Options()
-    options.add_experimental_option("prefs", prefs)
-    options.binary_location = chrome_binary_path
-    options.add_argument("--no-sandbox")
-    options.add_argument("--headless")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--diable-gpu")
-    options.add_argument("--log-level=3")
-
-    driver = webdriver.Chrome(
-        service=ChromeService(ChromeDriverManager().install()), options=options
-    )
-    return driver
+# Internal
+from src.utils import (
+    find_files,
+    initiate_multiprocess,
+    validate_lst_optimizations,
+    clean_up_downloads,
+    logger,
+)
+from src.gcp_processes import (
+    load_dataframe_to_gcp,
+    remove_current_ind,
+    rate_rules_table,
+    log_table,
+    copy_files_to_gcs,
+    get_hotel_list,
+)
+from src.process_files import (
+    create_modified_files,
+    create_rate_rule_dataframe,
+    create_log_dataframe,
+    update_optimization_json,
+)
+from src.web_scrape import multiprocess_downloads, get_hotels_for_query
 
 
-def login_to_site(driver: webdriver):
-    """Login to the selected website using environment credentials and load differential page."""
+def main():
+    """
+    Application flow:
+    1. Scrapes available hotel list from the vendor website, this is used to query the GCP database to get optimization details. We do it this way because there are 'Enabled' hotels on the vendor site that are not known in the database, so to avoid checking against 2600 hotels to see if they're enabled we are grabbing the list directly from the source.
+    2. Query the database for optimization details then use this same hotel list to log into and download files from the vendor site, using up to 3 multiprocesses workers for performance. We validate that downloads were successful, if not it will retry twice. Files that are validated are moved from ./data/downloads to ./data/raw for additional processing.
+    3. Files modified with additional data points and saved as csv files to ./data/processed
+    4. Database query runs to turn all transactions with current_ind = 'Y' to null
+    5. Files are then read into Pandas to be converted to a DataFrame and then uploaded to GCP.
+    6. A log DataFrame is created from the files in ./data/raw and uploaded to the appropriate target table.
+    7. Copy process kicks off which copies both ./data/raw and ./data/processed files to GCS Storage for later reference.
+    8. Clean up process deletes files from ./data/downloads ./data/raw and ./data/processed
+    """
+    raw_directory = "./data/raw"
+    processed_directory = "./data/processed"
+    raw_gcs_path = "gs://storage/path"
+    modified_gcs_path = "gs://storage/path"
 
-    WebDriverWait(driver, 15).until(
-        EC.element_to_be_clickable((By.XPATH, '//*[@id="1-email"]'))
-    ).send_keys(USERNAME)
-    WebDriverWait(driver, 10).until(
-        EC.element_to_be_clickable(
-            (
-                By.XPATH,
-                '//*[@id="auth0-lock-container-1"]/div/div[2]/form/div/div/div/div/div[2]/div[2]/span/div/div/div/div/div/div/div/div/div/div/div[2]/div/div/input',
+    start_timer = time.perf_counter()
+    logger.info("++++++ Beginning Process ++++++")
+
+    # Scrape website for hotel list
+    available_hotels = get_hotels_for_query()
+
+    # Use that scraped list to query the database
+    queried_hotel_list = get_hotel_list(available_hotels=available_hotels)
+    hotels_to_download = validate_lst_optimizations(queried_hotel_list)
+
+    # Only hotels where their optimization in the DB doesn't match the json require additional action
+    if hotels_to_download is None:
+        logger.info("No hotels to update at this time.")
+    else:
+        multiprocess_downloads(hotels_to_download["hotel_cd"])
+
+        # Sanity check to make sure there are downloaded files
+        contents = os.listdir(raw_directory)
+
+        if contents:
+            logger.debug(f"File Contents: {contents}")
+
+            # Multiprocess modifying and saving new files
+            raw_hotel_files = find_files(raw_directory)
+            hotels = initiate_multiprocess(
+                func=create_modified_files, iterable=raw_hotel_files
             )
-        )
-    ).send_keys(PASSWORD)
 
-    login_button = WebDriverWait(driver, 15).until(
-        EC.element_to_be_clickable(
-            (
-                By.XPATH,
-                '//*[@id="auth0-lock-container-1"]/div/div[2]/form/div/div/div/button',
+            # Create dataframe for rate rule table
+            modified_hotel_files = find_files(processed_directory)
+            rate_rule_df = create_rate_rule_dataframe(modified_hotel_files)
+
+            # Create dataframe for log table
+            log_df = create_log_dataframe(hotels, processed_directory)
+
+            # Clear indicators in table for existing records
+            remove_current_ind(hotels)
+
+            # Load rate rules data to GCP
+            load_dataframe_to_gcp(rate_rule_df, destination=rate_rules_table)
+            # Load log data to GCP
+            load_dataframe_to_gcp(log_df, destination=log_table)
+
+            # Update the optimization json with the information from the database
+            update_optimization_json(queried_hotel_list)
+
+            # Copy Files to Google Cloud Storage
+            initiate_multiprocess(
+                func=copy_files_to_gcs,
+                iterable=raw_hotel_files,
+                extra_param=raw_gcs_path,
             )
-        )
-    )
-    login_button.click()
-    time.sleep(4)
-
-    # Go to destination page of the website.
-    driver.get("<destinationURL>")
-
-
-def select_hotel(driver: webdriver, hotel: str):
-    """Type in the hotel code in the search bar of the website to return appropriate screen."""
-    try:
-        hotel_selection = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable(
-                (By.XPATH, '//kendo-searchbar//input[@class="k-input"]')
+            initiate_multiprocess(
+                func=copy_files_to_gcs,
+                iterable=modified_hotel_files,
+                extra_param=modified_gcs_path,
             )
-        )
-    except Exception:
-        logger.error(f"Unable to select {hotel}")
 
-    # Selecting the hotel and waiting for the page to load. Added sleep between each to prevent errors if the site isn't loading quickly.
-    hotel_selection.clear()
-    time.sleep(1)
-    hotel_selection.send_keys(hotel)
-    time.sleep(2)
-    hotel_selection.send_keys(Keys.RETURN)
+            # Remove downloaded, processed, and raw files
+            clean_up_downloads()
+        else:
+            logger.warning("No files were found for upload.")
 
-
-@retry(delay=2, tries=3, backoff=2)
-def download_differentials(driver: webdriver, hotel: str):
-    """Navigating to and waiting for differentials page to load before clicking the download button. Sleep at the end is for the download to finish completely. This function retries 3 times to download the files for the hotel and if it finally cannot it goes to CustomException which passes so we move on to the next hotel."""
-
-    try:
-        button = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable(
-                (
-                    By.XPATH,
-                    '//*[@id="home"]/div[3]/app-dynamic-diff/div/div[2]/div/div/button[2]',
-                )
-            )
-        )
-        button.click()
-        time.sleep(6)  # Give enough time for the download to finish before moving on
-
-    except Exception:
-        logger.error("TimeOut occurred on selected Website")
-        raise CustomException
-
-    try:
-        validate_file = validate_file_download(hotel)
-
-        if not validate_file:
-            logger.warning(f"Download failed for {hotel}, trying again.")
-            select_hotel(driver, hotel)
-            raise FileNotFoundError
-    except FileNotFoundError:
-        raise CustomException
+    end_time = time.perf_counter()
+    logger.info(f"Finished in: {round(end_time-start_timer, 2)} second(s)")
+    logger.info("------ Complete ------")
 
 
 if __name__ == "__main__":
-    hotel_codes = validate_lst_optimizations()
-
-    if hotel_codes is None:
-        logger.info("No hotels to update at this time.")
-    else:
-        driver = create_webdriver()
-        driver.get("<loginURL>")
-
-        login_to_site(driver)
-
-        for hotel in hotel_codes["hotel_cd"]:
-            select_hotel(driver, hotel)
-            try:
-                download_differentials(driver, hotel)
-            except CustomException:
-                logger.error(f"Unable to download or validate file for {hotel}")
-
-        driver.close()
-
-        contents = os.listdir("./downloads")
-
-        # Only proceed if at least 1 file was downloaded.
-        if contents:
-            logger.debug(f"File contents: {contents}")
-            load_to_bigquery(hotel_codes["hotel_cd"])
-        else:
-            logger.warning("No files were found for upload.")
+    main()
