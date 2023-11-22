@@ -42,64 +42,8 @@ This project was written using Selenium, Subprocess (to write and read to GCP), 
 
 - The Cloud shell only offers 5GB of data storage and each hotel takes up roughly 10MB of storage. I only had a little over 1 GB to spare which will fill up quickly (10 hotels a day X 10MB per hotel) = 100 MB a day in storage. Because of this, I needed to implement a clean-up process at the end of the script to remove the downloads, modified files, and temp files I created. I don't know if this project will still be in use by the time it's 100 hotels a day but if so then I'll need to do a cleanup after each hotel at that point so the code would require refactoring.
 
-- Writing from an existing CSV file to a GCP Table was easy enough but I wanted a log table that would be created from JSON. At first, I did this with the google-bigquery client package and it was working for a few days… until the permissions error started and then I had to change paths. It led to using temp files to store the JSON data and then use those to update the log tables. The biggest issue was the below logic:
-```Python
-for hotel in hotel_codes() # List of Hotel Codes
-	for filename in os.listdir(directory) # All the files in the downloads folder from the N2P Site
-		if hotel in filename: # verifying that there is a file for this hotel
-			# Code to write to table
-			break
-	else:
-		# Code to write to table
-```
-- I tried using a variable found_file = False on the first inner for loop along with found_file = True after the 'if hotel', then doing an if not found_file with the second for loop. It worked for most entries but typically the last hotel in the list would trigger both the 'found' and 'not_found' blocks. Ultimately realized I could do an ELSE on the for loop instead, removing the found_file variable entirely. Ultimately I found a better approach than using temp files for every hotel and setting on the below code:
-```Python
-def update_log_table(hotel_codes: str):
-    """Update the log table with file information for hotels that did and did not get downloaded."""
-
-    project_id = "project_id"
-    dataset_id = "dataset_id"
-    table_id = "table_id"
-
-    directory_path = "./downloads/"
-
-    date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    list_of_dict_data = []
-
-    # Loop through files in the directory
-    for hotel in hotel_codes:
-        for filename in os.listdir(directory_path):
-            if hotel in filename:
-                download_time = extract_datetime(filename)
-                file_path = os.path.join(directory_path, filename)
-                df = pd.read_csv(file_path)
-                data_amt = len(df)
-
-                table_data = {
-                    "LOC_ID": hotel,
-                    "DATA_AMT": data_amt,
-                    "SRC_FILENAME": filename,
-                    "SRC_FILE_TS": download_time,
-                    "CREAT_TS": date,
-                }
-
-                list_of_dict_data.append(table_data)
-                break
-
-        else:  # If the hotel doesn't have a file upload with null values for 3 fields.
-            table_data = {
-                "LOC_ID": hotel,
-                "DATA_AMT": None,
-                "SRC_FILENAME": None,
-                "SRC_FILE_TS": None,
-                "CREAT_TS": date,
-            }
-
-            list_of_dict_data.append(table_data)
-
-    df = pd.DataFrame(list_of_dict_data)
-
-    csv_temp_file = "./temp_files/log_file.csv"
-    df.to_csv(csv_temp_file, index=False)
-```
+- The first main implementation of this worked well but there were two main problems:
+	- We distinguish in our database hotels that are active on the website with an 'A' flag but sometimes are on the vendor site already but are not technically active yet but the business team wanted information on those hotels too.
+  		- To solve this I implemented a solution that scrapes the hotel list off the vendor site instead of looking for 'A' hotels in the database.
+ 	- The application was taking roughly 20 minutes to process about 40-50 hotels at a time which was fine originally but it was taking longer than expected for the vendor to implement the permanent solution so this solution would need to be faster to handle hundreds of hotels.
+  		- To solve this I refactored the entire approach and implemented multiprocessing for the scraping and file processing, which made massive performance improvements.
