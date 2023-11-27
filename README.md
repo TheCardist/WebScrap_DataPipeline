@@ -16,22 +16,25 @@ This project was written using Selenium, Subprocess (to write and read to GCP), 
 
 ## Application Flow
 - #### Getting the Hotel List
-	- A query retrieves the hotels that are active on the platform.
+	- To get only the required hotels, I scrape the available hotel list from the vendor site.
+   	- I use these hotels in a database query to get their last optimization timestamp.
 	- This list of hotels is then compared against the optimizations.json file for the following:
 		- Does the hotel exist in the JSON? If not, then it's added and this hotel is selected for downloads.
 		- Does the hotel code + lst_optimization match what's in the file currently? If the optimization does not match then it means an optimization has occurred since the last run so this hotel would also be selected for downloads. 
 	- If there are no hotels then that's the end of the program.
 - #### Scrape Platform Website
-	- Next, the application logins into the site and loops through each hotel within the Hotel List, logging into each property and downloading the report.
-	- After the download I loop through the download directory to verify if that hotel has a file.
-	- If a file fails to download then I remove the lst_optimization information from the JSON and it retries up to 3 times to re-download the file.
- - Assuming there were files downloaded then it moves to the next step.
+	- Next, the application logins into the site and loops through each hotel within the Hotel List, logging into each property and downloading the report. This process uses multiprocessing with 3 workers, the hotel list is broken amongst them to prevent duplicate downloads.
+	- After a download we verify if the file has in fact downloaded to the downloads folder, if it's found then we move it to the /raw folder for further processing.
+   		- I move it out for two reason.
+       			1. It prevents duplicates of the same hotel as only one file would get moved and the other would remain in this folder.
+       			2. It cuts down on the processing time when there are a lot of hotels.
+	- If a file fails to download then it's sent back to retry (up to two times) before giving up on that hotel file.
 - #### Report Cleaning
-	- The downloaded reports are missing a few components that we want to have in the BQ table so I modify the files for each hotel to add those columns and data points then save the files as a modified version.
+	- The downloaded reports are missing a few components that we want to have in the BQ table so I modify the files for each hotel to add those columns and data points then save the files as a modified version. This process also uses multiprocessing to quickly modify all the files.
 - #### Load to BigQuery
-	- After that, I load the files to the appropriate tables
+  	- All files are merged into a single pandas dataframe which is then used to upload to the appropriate GCP tables.
 - #### Cleanup
-	- Finally, I clean up the files in the local environment by copying them to a google cloud storage location, saving both the original and modified versions. Then I delete all the files I downloaded and modified, as well as some temp files I created in the process.
+	- Files that are in the /raw and /processed folder are copied to the Google Cloud Storage as a back-up and then files in those two directories and /downloads are all removed.
 
 ## Learnings
 - This program was created in my local Windows environment using the google-bigquery package and accessing my personal GCP tables with a keys.json for credentials. I had never used the Cloud shell environment in GCP. After getting access to the appropriate work project_id in GCP, I moved this code to the Miniconda environment I set up. I found that the Google-bigquery client would no longer work due to permission issues; this also meant the keys.json was no longer necessary. This is when Subprocess with Gsutil was added to the code and refactored to support this new approach.
