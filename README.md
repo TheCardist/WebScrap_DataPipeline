@@ -26,8 +26,8 @@ This project was written using Selenium, Subprocess (to write and read to GCP), 
 	- Next, the application logins into the site and loops through each hotel within the Hotel List, logging into each property and downloading the report. This process uses multiprocessing with 3 workers, the hotel list is broken amongst them to prevent duplicate downloads.
 	- After a download we verify if the file has in fact downloaded to the downloads folder, if it's found then we move it to the /raw folder for further processing.
    		- I move it out for two reason.
-       			- 1. It prevents duplicates of the same hotel as only one file would get moved and the other would remain in this folder.
-       			- 2. It cuts down on the processing time when there are a lot of hotels.
+			- It prevents duplicates of the same hotel as only one file would get moved and the other would remain in this folder.
+       			- It cuts down on the processing time when there are a lot of hotels.
 	- If a file fails to download then it's sent back to retry (up to two times) before giving up on that hotel file.
 - #### Report Cleaning
 	- The downloaded reports are missing a few components that we want to have in the BQ table so I modify the files for each hotel to add those columns and data points then save the files as a modified version. This process also uses multiprocessing to quickly modify all the files.
