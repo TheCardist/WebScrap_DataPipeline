@@ -27,7 +27,7 @@ This project was written using Selenium, Subprocess (to write and read to GCP), 
 	- After a download we verify if the file has in fact downloaded to the downloads folder, if it's found then we move it to the /raw folder for further processing.
    		- I move it out for two reason.
 			- It prevents duplicates of the same hotel as only one file would get moved and the other would remain in this folder.
-       			- It cuts down on the processing time when there are a lot of hotels.
+			- It cuts down on the processing time when there are a lot of hotels.
 	- If a file fails to download then it's sent back to retry (up to two times) before giving up on that hotel file.
 - #### Report Cleaning
 	- The downloaded reports are missing a few components that we want to have in the BQ table so I modify the files for each hotel to add those columns and data points then save the files as a modified version. This process also uses multiprocessing to quickly modify all the files.
